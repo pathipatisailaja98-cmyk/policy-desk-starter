@@ -1,54 +1,224 @@
-"""Claims API.   *** LAB 3: YOUR CODE HERE ***
+"""Claims API. *** LAB 3: YOUR CODE HERE ***
 
-POST  /api/claims               -> file a claim (201). Runs services.claims.validate_claim:
-                                     ClaimValidationError with auto_reject  -> save the claim as Rejected, reason = message
-                                     ClaimValidationError otherwise         -> 422 with the message
-                                     404 if the policy does not exist
-PATCH /api/claims/{id}/status   -> move a claim through the workflow:
-                                     409 if the transition is not allowed (services.claims.can_transition)
-                                     422 when approving more than the remaining cover
-                                     reason is stored alongside the status
+POST /api/claims -> file a claim (201)
+
+PATCH /api/claims/{id}/status -> move a claim through the workflow
 """
+
 from fastapi import APIRouter, Depends, HTTPException, status
+
 from sqlmodel import Session, select
 
 from app.db import get_session
-from app.models import Claim, ClaimCreate, ClaimRead, ClaimStatus, ClaimStatusUpdate, Policy
+
+from app.models import (
+    Claim,
+    ClaimCreate,
+    ClaimRead,
+    ClaimStatus,
+    ClaimStatusUpdate,
+    Policy,
+)
+
 from app.services import claims as claim_rules
 
-router = APIRouter(prefix="/api/claims", tags=["claims"])
+
+router = APIRouter(
+    prefix="/api/claims",
+    tags=["claims"],
+)
 
 
-def file_claim(payload: ClaimCreate, session: Session) -> Claim:
+# ---------------------------------------------------------------------------
+# File a claim
+# ---------------------------------------------------------------------------
+
+def file_claim(
+    payload: ClaimCreate,
+    session: Session,
+) -> Claim:
     """Shared by the API and the HTML form."""
-    # TODO (Lab 3): look up the policy (404), build Claim.model_validate(payload), run
-    #                       claim_rules.validate_claim(...), handle the two kinds of error, save and return.
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "TODO Lab 3: implement file_claim in app/routers/claims.py")
 
+    # 1. Find the policy
+    policy = session.get(Policy, payload.policy_id)
 
-@router.get("", response_model=list[ClaimRead])
-def list_claims(policy_id: int | None = None, session: Session = Depends(get_session)):
-    stmt = select(Claim).order_by(Claim.created_at.desc())
-    if policy_id:
-        stmt = stmt.where(Claim.policy_id == policy_id)
-    return session.exec(stmt).all()
+    if policy is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Policy not found",
+        )
 
+    # 2. Validate the claim using the Lab 3 business rules
+    try:
+        claim_rules.validate_claim(
+            session,
+            policy,
+            amount=payload.amount,
+            incident_date=payload.incident_date,
+            vehicle_registration=payload.vehicle_registration,
+        )
 
-@router.post("", response_model=ClaimRead, status_code=status.HTTP_201_CREATED)
-def create_claim(payload: ClaimCreate, session: Session = Depends(get_session)):
-    return file_claim(payload, session)
+    except claim_rules.ClaimValidationError as exc:
 
+        # Cancelled policy:
+        # save the claim as Rejected
+        if exc.auto_reject:
+            claim = Claim.model_validate(payload)
 
-@router.get("/{claim_id}", response_model=ClaimRead)
-def get_claim(claim_id: int, session: Session = Depends(get_session)):
-    claim = session.get(Claim, claim_id)
-    if not claim:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Claim not found")
+            claim.status = ClaimStatus.REJECTED
+            claim.reason = str(exc)
+
+            session.add(claim)
+            session.commit()
+            session.refresh(claim)
+
+            return claim
+
+        # Other validation failures -> 422
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    # 3. Valid claim -> Filed
+    claim = Claim.model_validate(payload)
+
+    claim.status = ClaimStatus.FILED
+    claim.reason = None
+
+    session.add(claim)
+    session.commit()
+    session.refresh(claim)
+
     return claim
 
 
-@router.patch("/{claim_id}/status", response_model=ClaimRead)
-def update_claim_status(claim_id: int, payload: ClaimStatusUpdate, session: Session = Depends(get_session)):
-    # TODO (Lab 3): 404 if missing; 409 unless claim_rules.can_transition(...); when approving, 422 if
-    #                       claim.amount > claim_rules.remaining_cover(session, claim.policy); then save status + reason.
-    raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "TODO Lab 3: implement update_claim_status")
+# ---------------------------------------------------------------------------
+# List claims
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "",
+    response_model=list[ClaimRead],
+)
+def list_claims(
+    policy_id: int | None = None,
+    session: Session = Depends(get_session),
+):
+    stmt = select(Claim).order_by(Claim.created_at.desc())
+
+    if policy_id:
+        stmt = stmt.where(
+            Claim.policy_id == policy_id
+        )
+
+    return session.exec(stmt).all()
+
+
+# ---------------------------------------------------------------------------
+# Create claim
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "",
+    response_model=ClaimRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_claim(
+    payload: ClaimCreate,
+    session: Session = Depends(get_session),
+):
+    return file_claim(payload, session)
+
+
+# ---------------------------------------------------------------------------
+# Get one claim
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/{claim_id}",
+    response_model=ClaimRead,
+)
+def get_claim(
+    claim_id: int,
+    session: Session = Depends(get_session),
+):
+    claim = session.get(Claim, claim_id)
+
+    if not claim:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Claim not found",
+        )
+
+    return claim
+
+
+# ---------------------------------------------------------------------------
+# Update claim status
+# ---------------------------------------------------------------------------
+
+@router.patch(
+    "/{claim_id}/status",
+    response_model=ClaimRead,
+)
+def update_claim_status(
+    claim_id: int,
+    payload: ClaimStatusUpdate,
+    session: Session = Depends(get_session),
+):
+    # 1. Find claim
+    claim = session.get(Claim, claim_id)
+
+    if claim is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Claim not found",
+        )
+
+    # 2. Check whether the status transition is allowed
+    if not claim_rules.can_transition(
+        claim.status,
+        payload.status,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Cannot change claim status from "
+                f"{claim.status.value} to "
+                f"{payload.status.value}"
+            ),
+        )
+
+    # 3. When approving, check remaining cover
+    if payload.status == ClaimStatus.APPROVED:
+
+        remaining = claim_rules.remaining_cover(
+            session,
+            claim.policy,
+        )
+
+        if claim.amount > remaining:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Claim amount exceeds remaining cover "
+                    f"of {remaining:.2f}"
+                ),
+            )
+
+    # 4. Update status
+    claim.status = payload.status
+
+    # 5. Store the reason
+    claim.reason = (
+        payload.reason.strip()
+        if payload.reason and payload.reason.strip()
+        else None
+    )
+
+    session.add(claim)
+    session.commit()
+    session.refresh(claim)
+
+    return claim

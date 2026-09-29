@@ -3,7 +3,8 @@
 Five tables: Customer, Product, Quote, Policy, Claim.
 Flow: Customer + Product -> Quote -> Policy -> Claim
 """
-from datetime import date, datetime
+
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -14,6 +15,7 @@ from sqlmodel import Field, Relationship, SQLModel
 # --------------------------------------------------------------------------- #
 # Enums
 # --------------------------------------------------------------------------- #
+
 class ProductCode(str, Enum):
     HEALTH = "HEALTH"
     MOTOR = "MOTOR"
@@ -36,6 +38,7 @@ class ClaimStatus(str, Enum):
 # --------------------------------------------------------------------------- #
 # Customer
 # --------------------------------------------------------------------------- #
+
 class CustomerBase(SQLModel):
     name: str = Field(min_length=2, max_length=80)
     email: EmailStr = Field(index=True)
@@ -45,10 +48,18 @@ class CustomerBase(SQLModel):
 
 class Customer(CustomerBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
 
-    quotes: list["Quote"] = Relationship(back_populates="customer")
-    policies: list["Policy"] = Relationship(back_populates="customer")
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+    quotes: list["Quote"] = Relationship(
+        back_populates="customer"
+    )
+
+    policies: list["Policy"] = Relationship(
+        back_populates="customer"
+    )
 
 
 class CustomerCreate(CustomerBase):
@@ -63,17 +74,32 @@ class CustomerRead(CustomerBase):
 # --------------------------------------------------------------------------- #
 # Product
 # --------------------------------------------------------------------------- #
+
 class ProductBase(SQLModel):
-    code: ProductCode = Field(unique=True, index=True)
+    code: ProductCode = Field(
+        unique=True,
+        index=True
+    )
+
     name: str
+
     description: str = ""
-    base_rate: float = Field(gt=0, description="Premium per rupee of sum insured per year")
+
+    base_rate: float = Field(
+        gt=0,
+        description="Premium per rupee of sum insured per year"
+    )
+
     min_sum_insured: float = Field(gt=0)
+
     max_sum_insured: float = Field(gt=0)
 
 
 class Product(ProductBase, table=True):
-    id: int | None = Field(default=None, primary_key=True)
+    id: int | None = Field(
+        default=None,
+        primary_key=True
+    )
 
 
 class ProductRead(ProductBase):
@@ -83,22 +109,50 @@ class ProductRead(ProductBase):
 # --------------------------------------------------------------------------- #
 # Quote
 # --------------------------------------------------------------------------- #
+
 class QuoteBase(SQLModel):
-    customer_id: int = Field(foreign_key="customer.id")
-    product_id: int = Field(foreign_key="product.id")
+    customer_id: int = Field(
+        foreign_key="customer.id"
+    )
+
+    product_id: int = Field(
+        foreign_key="product.id"
+    )
+
     sum_insured: float = Field(gt=0)
-    tenure_years: int = Field(ge=1, le=3)
-    add_ons: str = Field(default="", description="Comma-separated add-on codes, e.g. CRITICAL_ILLNESS")
+
+    tenure_years: int = Field(
+        ge=1,
+        le=3
+    )
+
+    add_ons: str = Field(
+        default="",
+        description="Comma-separated add-on codes, e.g. CRITICAL_ILLNESS"
+    )
 
 
 class Quote(QuoteBase, table=True):
-    id: int | None = Field(default=None, primary_key=True)
-    premium: float
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    id: int | None = Field(
+        default=None,
+        primary_key=True
+    )
 
-    customer: Customer = Relationship(back_populates="quotes")
+    premium: float
+
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+    customer: Customer = Relationship(
+        back_populates="quotes"
+    )
+
     product: Product = Relationship()
-    policy: Optional["Policy"] = Relationship(back_populates="quote")
+
+    policy: Optional["Policy"] = Relationship(
+        back_populates="quote"
+    )
 
 
 class QuoteCreate(QuoteBase):
@@ -114,27 +168,67 @@ class QuoteRead(QuoteBase):
 # --------------------------------------------------------------------------- #
 # Policy
 # --------------------------------------------------------------------------- #
+
 class PolicyBase(SQLModel):
-    quote_id: int = Field(foreign_key="quote.id", unique=True)
+    quote_id: int = Field(
+        foreign_key="quote.id",
+        unique=True
+    )
+
     start_date: date
 
 
 class Policy(PolicyBase, table=True):
-    id: int | None = Field(default=None, primary_key=True)
-    policy_number: str = Field(unique=True, index=True)
-    customer_id: int = Field(foreign_key="customer.id")
-    product_id: int = Field(foreign_key="product.id")
-    sum_insured: float
-    premium: float
-    end_date: date
-    status: PolicyStatus = Field(default=PolicyStatus.ACTIVE)
-    vehicle_registration: str | None = Field(default=None, description="Motor policies only")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    id: int | None = Field(
+        default=None,
+        primary_key=True
+    )
 
-    quote: Quote = Relationship(back_populates="policy")
-    customer: Customer = Relationship(back_populates="policies")
+    policy_number: str = Field(
+        unique=True,
+        index=True
+    )
+
+    customer_id: int = Field(
+        foreign_key="customer.id"
+    )
+
+    product_id: int = Field(
+        foreign_key="product.id"
+    )
+
+    sum_insured: float
+
+    premium: float
+
+    end_date: date
+
+    status: PolicyStatus = Field(
+        default=PolicyStatus.ACTIVE
+    )
+
+    vehicle_registration: str | None = Field(
+        default=None,
+        description="Motor policies only"
+    )
+
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+    quote: Quote = Relationship(
+        back_populates="policy"
+    )
+
+    customer: Customer = Relationship(
+        back_populates="policies"
+    )
+
     product: Product = Relationship()
-    claims: list["Claim"] = Relationship(back_populates="policy")
+
+    claims: list["Claim"] = Relationship(
+        back_populates="policy"
+    )
 
 
 class PolicyCreate(PolicyBase):
@@ -163,21 +257,49 @@ class PolicyStatusUpdate(SQLModel):
 # --------------------------------------------------------------------------- #
 # Claim
 # --------------------------------------------------------------------------- #
+
 class ClaimBase(SQLModel):
-    policy_id: int = Field(foreign_key="policy.id")
+    policy_id: int = Field(
+        foreign_key="policy.id"
+    )
+
     amount: float = Field(gt=0)
-    description: str = Field(min_length=5, max_length=500)
+
+    description: str = Field(
+        min_length=5,
+        max_length=500
+    )
+
     incident_date: date
-    vehicle_registration: str | None = Field(default=None, description="Required for Motor claims")
+
+    vehicle_registration: str | None = Field(
+        default=None,
+        description="Required for Motor claims"
+    )
 
 
 class Claim(ClaimBase, table=True):
-    id: int | None = Field(default=None, primary_key=True)
-    status: ClaimStatus = Field(default=ClaimStatus.FILED)
-    reason: str | None = Field(default=None, description="Why a claim was rejected")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    id: int | None = Field(
+        default=None,
+        primary_key=True
+    )
 
-    policy: Policy = Relationship(back_populates="claims")
+    status: ClaimStatus = Field(
+        default=ClaimStatus.FILED
+    )
+
+    reason: str | None = Field(
+        default=None,
+        description="Why a claim was rejected"
+    )
+
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+    policy: Policy = Relationship(
+        back_populates="claims"
+    )
 
 
 class ClaimCreate(ClaimBase):
